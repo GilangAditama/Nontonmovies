@@ -15,9 +15,10 @@ class Midasxxi : MainAPI() {
 
     override var mainUrl = "https://ssstik.tv"
     private var directUrl = mainUrl
+
     override var name = "Midasxxi🍡"
-    override val hasMainPage = true
     override var lang = "id"
+    override val hasMainPage = true
     override val hasDownloadSupport = true
 
     override val supportedTypes = setOf(
@@ -40,50 +41,55 @@ class Midasxxi : MainAPI() {
         "$mainUrl/genre/drama/page/" to "Drama",
         "$mainUrl/genre/fantasy/page/" to "Fantasy",
         "$mainUrl/genre/horror/page/" to "Horror",
-        "$mainUrl/genre/mystery/page/" to "Mistery",
+        "$mainUrl/genre/mystery/page/" to "Mystery",
 
         "$mainUrl/country/china/page/" to "China",
-        "$mainUrl/country/japan/page/" to "Jepang",
-        "$mainUrl/country/philippines/page/" to "Philipines",
+        "$mainUrl/country/japan/page/" to "Japan",
+        "$mainUrl/country/philippines/page/" to "Philippines",
         "$mainUrl/country/thailand/page/" to "Thailand"
     )
+
+    // ================= HELPERS =================
 
     private fun getBaseUrl(url: String): String =
         URI(url).let { "${it.scheme}://${it.host}" }
 
-    // ================= LINK FIX =================
+    private fun String.fixUrlSelf(): String {
+        if (startsWith("http")) return this
+        if (startsWith("//")) return "https:$this"
+        return mainUrl + this
+    }
 
-    private fun getProperLink(url: String): String = url
+    private fun getProperLink(url: String): String {
+        return when {
+            url.contains("/episode/") || url.contains("/season/") -> {
+                val slug = url.substringAfterLast("/").substringBefore("-season")
+                "$mainUrl/tvseries/$slug"
+            }
+            else -> url
+        }
+    }
 
     // ================= POSTER =================
 
-    private fun Element.poster(): String? =
-        selectFirst("div.poster img")?.attr("src")?.fixUrl()
+    private fun extractPoster(el: Element): String? {
+        el.selectFirst("img")?.let {
+            val src = it.attr("data-src")
+                .ifBlank { it.attr("data-lazy-src") }
+                .ifBlank { it.attr("src") }
 
-    // ================= SEARCH RESULT =================
-
-    private fun Element.toSearchResult(): SearchResponse? {
-
-        val title = selectFirst("div.data h3 a")?.text()?.trim()
-            ?: return null
-
-        val href = selectFirst("div.poster a")?.attr("href")
-            ?: return null
-
-        val poster = poster()
-        val quality = getQualityFromString(selectFirst("span.quality")?.text())
-
-        val type =
-            if (hasClass("tvshows")) TvType.TvSeries else TvType.Movie
-
-        return newMovieSearchResponse(
-            title,
-            getProperLink(href),
-            type
-        ) {
-            posterUrl = poster
-            this.quality = quality
+            if (src.isNotBlank()) return src.fixUrlSelf()
         }
+
+        el.attr("style")?.let { style ->
+            Regex("url\\(['\"]?(.*?)['\"]?\\)")
+                .find(style)
+                ?.groupValues
+                ?.get(1)
+                ?.let { return it.fixUrlSelf() }
+        }
+
+        return null
     }
 
     // ================= HOMEPAGE =================
@@ -100,76 +106,92 @@ class Midasxxi : MainAPI() {
 
         mainUrl = getBaseUrl(req.url)
 
-        val home = req.document
+        val items = req.document
             .select("article.item")
             .mapNotNull { it.toSearchResult() }
 
-        return newHomePageResponse(request.name, home)
+        return newHomePageResponse(request.name, items)
+    }
+
+    private fun Element.toSearchResult(): SearchResponse? {
+        val title =
+            selectFirst("img")?.attr("alt")
+                ?.ifBlank { selectFirst("h3,h2")?.text() }
+                ?.trim()
+                ?: return null
+
+        val href = selectFirst("a")?.attr("href") ?: return null
+        val poster = extractPoster(this)
+
+        val type =
+            if (href.contains("/tv")) TvType.TvSeries else TvType.Movie
+
+        return newMovieSearchResponse(
+            title,
+            getProperLink(href),
+            type
+        ) {
+            posterUrl = poster
+        }
     }
 
     // ================= SEARCH =================
 
     override suspend fun search(query: String, page: Int): SearchResponseList? {
-
         val req = app.get("$mainUrl/search/$query/page/$page")
         mainUrl = getBaseUrl(req.url)
 
-        val results = req.document
-            .select("div.result-item")
-            .mapNotNull {
-                val title = it.selectFirst("div.title a")?.text()?.trim()
-                    ?: return@mapNotNull null
-                val href = it.selectFirst("div.title a")?.attr("href")
-                    ?: return@mapNotNull null
-                val poster = it.selectFirst("img")?.attr("src")?.fixUrl()
+        val results = req.document.select("div.result-item").mapNotNull {
+            val a = it.selectFirst("div.title a") ?: return@mapNotNull null
+            val title = a.text().trim()
+            val href = getProperLink(a.attr("href"))
+            val poster = extractPoster(it)
 
-                newMovieSearchResponse(title, href, TvType.Movie) {
-                    posterUrl = poster
-                }
+            newMovieSearchResponse(title, href, TvType.Movie) {
+                posterUrl = poster
             }
+        }
 
         return results.toNewSearchResponseList()
     }
 
-    // ================= LOAD DETAIL =================
+    // ================= LOAD =================
 
     override suspend fun load(url: String): LoadResponse {
-
         val req = app.get(url)
         directUrl = getBaseUrl(req.url)
         val doc = req.document
 
-        val title = doc.selectFirst("div.data h1")?.text()?.trim() ?: "Unknown"
-        val poster = doc.selectFirst("div.poster img")?.attr("src")?.fixUrl()
+        val title =
+            doc.selectFirst("h1")?.text()?.trim() ?: "Unknown"
+
+        val poster = extractPoster(doc)
         val plot = doc.selectFirst("div.wp-content p")?.text()
-        val trailer = doc.selectFirst("iframe")?.attr("src")
+        val tags = doc.select("div.sgeneros a").map { it.text() }
 
-        val actors = doc.select("div.persons div[itemprop=actor]").map {
-            Actor(
-                it.select("meta[itemprop=name]").attr("content"),
-                it.select("img").attr("src")
-            )
-        }
+        val tvType =
+            if (doc.select("ul.episodios").isNotEmpty())
+                TvType.TvSeries
+            else
+                TvType.Movie
 
-        val isTv =
-            doc.select("ul.episodios").isNotEmpty()
-
-        return if (isTv) {
+        return if (tvType == TvType.TvSeries) {
 
             val episodes = doc.select("ul.episodios li").map {
-                val href = it.selectFirst("a")?.attr("href") ?: ""
-                val name = it.selectFirst("div.episodiotitle")?.text()
+                val link = it.selectFirst("a")?.attr("href") ?: ""
+                val name = it.selectFirst(".episodiotitle")?.text()
+                val img = extractPoster(it)
 
-                newEpisode(href) {
+                newEpisode(link) {
                     this.name = name
+                    this.posterUrl = img
                 }
             }
 
             newTvSeriesLoadResponse(title, url, TvType.TvSeries, episodes) {
                 posterUrl = poster
                 this.plot = plot
-                addActors(actors)
-                addTrailer(trailer)
+                this.tags = tags
             }
 
         } else {
@@ -177,13 +199,12 @@ class Midasxxi : MainAPI() {
             newMovieLoadResponse(title, url, TvType.Movie, url) {
                 posterUrl = poster
                 this.plot = plot
-                addActors(actors)
-                addTrailer(trailer)
+                this.tags = tags
             }
         }
     }
 
-    // ================= STREAM =================
+    // ================= LINKS =================
 
     override suspend fun loadLinks(
         data: String,
@@ -192,43 +213,50 @@ class Midasxxi : MainAPI() {
         callback: (ExtractorLink) -> Unit
     ): Boolean {
 
-        val document = app.get(data).document
+        val doc = app.get(data).document
 
-        document.select("ul#playeroptionsul li").amap {
-            val id = it.attr("data-post")
-            val nume = it.attr("data-nume")
-            val type = it.attr("data-type")
+        doc.select("ul#playeroptionsul li")
+            .map {
+                Triple(
+                    it.attr("data-post"),
+                    it.attr("data-nume"),
+                    it.attr("data-type")
+                )
+            }.amap { (id, nume, type) ->
 
-            val json = app.post(
-                "$directUrl/wp-admin/admin-ajax.php",
-                data = mapOf(
-                    "action" to "doo_player_ajax",
-                    "post" to id,
-                    "nume" to nume,
-                    "type" to type
-                ),
-                referer = data
-            ).parsedSafe<ResponseHash>() ?: return@amap
+                val json = app.post(
+                    "$directUrl/wp-admin/admin-ajax.php",
+                    data = mapOf(
+                        "action" to "doo_player_ajax",
+                        "post" to id,
+                        "nume" to nume,
+                        "type" to type
+                    ),
+                    referer = data,
+                    headers = mapOf("X-Requested-With" to "XMLHttpRequest")
+                ).parsedSafe<ResponseHash>() ?: return@amap
 
-            val aes = AppUtils.parseJson<AesData>(json.embed_url)
-            val key = generateKey(json.key, aes.m)
+                val aes = AppUtils.parseJson<AesData>(json.embed_url)
+                val key = generateKey(json.key, aes.m)
 
-            val decrypted = AesHelper.cryptoAESHandler(
-                json.embed_url,
-                key.toByteArray(),
-                false
-            )?.replace("\"", "") ?: return@amap
+                val decrypted = AesHelper.cryptoAESHandler(
+                    json.embed_url,
+                    key.toByteArray(),
+                    false
+                )?.replace("\"", "")?.replace("\\", "")
+                    ?: return@amap
 
-            loadExtractor(decrypted, directUrl, subtitleCallback, callback)
-        }
+                loadExtractor(decrypted, directUrl, subtitleCallback, callback)
+            }
 
         return true
     }
 
     private fun generateKey(r: String, m: String): String {
         val rList = r.split("\\x")
-        var n = ""
         val decoded = base64Decode(m.reversed())
+        var n = ""
+
         for (s in decoded.split("|")) {
             n += "\\x" + rList[s.toInt() + 1]
         }
