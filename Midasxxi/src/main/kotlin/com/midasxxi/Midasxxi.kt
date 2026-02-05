@@ -58,19 +58,8 @@ class Midasxxi : MainAPI() {
     }
 
     private fun extractQuality(el: Element): SearchQuality? {
-        val q = el.select("span.quality, div.quality, div.gmr-qual").text().uppercase()
-        return when {
-            "HD" in q -> SearchQuality.HD
-            "CAM" in q -> SearchQuality.CAM
-            "WEB" in q -> SearchQuality.WEB
-            "BLURAY" in q -> SearchQuality.BLURAY
-            else -> null
-        }
-    }
-
-    private fun extractRating(el: Element): Double? {
-        return el.selectFirst("div.gmr-rating-item, span[itemprop=ratingValue]")?.ownText()
-            ?.trim()?.toDoubleOrNull()
+        val q = el.select("span.quality").text().uppercase()
+        return if ("HD" in q) SearchQuality.HD else SearchQuality.SD
     }
 
     override suspend fun getMainPage(page: Int, request: MainPageRequest): HomePageResponse {
@@ -81,17 +70,18 @@ class Midasxxi : MainAPI() {
     }
 
     private fun Element.toSearchResult(): SearchResponse? {
-        val title = selectFirst("div.data h3 a, h2.entry-title a")?.text()?.trim()
-            ?: selectFirst("img")?.attr("alt") ?: return null
+        val title = selectFirst("div.data h3 a")?.text()
+            ?: selectFirst("img")?.attr("alt")
+            ?: return null
         val href = selectFirst("a")?.attr("href")?.fixUrl() ?: return null
         val poster = extractPoster(this)
         val quality = extractQuality(this)
-        val rating = extractRating(this)
+        val ratingText = selectFirst("span.rating")?.text()?.trim()
         val type = if (href.contains("/tvshows/")) TvType.TvSeries else TvType.Movie
-        return newMovieSearchResponse(title, href, type) {
+        return newMovieSearchResponse(title.trim(), href, type) {
             posterUrl = poster
             this.quality = quality
-            this.score = Score.from10(rating)
+            this.score = Score.from10(ratingText?.toDoubleOrNull())
         }
     }
 
@@ -156,7 +146,8 @@ class Midasxxi : MainAPI() {
                 json.embed_url,
                 key.toByteArray(),
                 false
-            )?.replace("\"", "")?.replace("\\", "") ?: return@amap
+            )?.replace("\"", "")?.replace("\\", "")
+                ?: return@amap
             loadExtractor(decrypted, directUrl, subtitleCallback, callback)
         }
         return true
@@ -166,7 +157,9 @@ class Midasxxi : MainAPI() {
         val rList = r.split("\\x")
         val decoded = base64Decode(m.reversed())
         var n = ""
-        for (s in decoded.split("|")) n += "\\x" + rList[s.toInt() + 1]
+        for (s in decoded.split("|")) {
+            n += "\\x" + rList[s.toInt() + 1]
+        }
         return n
     }
 
