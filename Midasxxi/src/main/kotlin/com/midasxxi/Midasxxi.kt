@@ -26,20 +26,20 @@ class Midasxxi : MainAPI() {
     )
 
     override val mainPage = mainPageOf(
-        "$mainUrl/page/" to "Latest Update",
-        "$mainUrl/tvshows/page/" to "TV Series",
-        "$mainUrl/genre/action/page/" to "Action",
-        "$mainUrl/genre/anime/page/" to "Anime",
-        "$mainUrl/genre/comedy/page/" to "Comedy",
-        "$mainUrl/genre/crime/page/" to "Crime",
-        "$mainUrl/genre/drama/page/" to "Drama",
-        "$mainUrl/genre/fantasy/page/" to "Fantasy",
-        "$mainUrl/genre/horror/page/" to "Horror",
-        "$mainUrl/genre/mystery/page/" to "Mystery",
-        "$mainUrl/country/china/page/" to "China",
-        "$mainUrl/country/japan/page/" to "Japan",
-        "$mainUrl/country/philippines/page/" to "Philippines",
-        "$mainUrl/country/thailand/page/" to "Thailand"
+        mainUrl to "Latest Update",
+        mainUrl to "TV Series",
+        mainUrl to "Action",
+        mainUrl to "Anime",
+        mainUrl to "Comedy",
+        mainUrl to "Crime",
+        mainUrl to "Drama",
+        mainUrl to "Fantasy",
+        mainUrl to "Horror",
+        mainUrl to "Mystery",
+        mainUrl to "China",
+        mainUrl to "Japan",
+        mainUrl to "Philippines",
+        mainUrl to "Thailand"
     )
 
     private fun getBaseUrl(url: String): String =
@@ -61,26 +61,27 @@ class Midasxxi : MainAPI() {
         return match?.fixUrl()
     }
 
-    private fun extractQuality(el: Element, category: String): SearchQuality? {
-        return when (category) {
-            "Latest Update", "Action" -> SearchQuality.HD
-            "TV Series" -> {
-                val q = el.selectFirst("span.quality")?.text()?.uppercase()
-                if (q?.contains("HD") == true) SearchQuality.HD else SearchQuality.SD
-            }
-            "Comedy" -> SearchQuality.SD
-            else -> null
-        }
-    }
-
     override suspend fun getMainPage(page: Int, request: MainPageRequest): HomePageResponse {
-        val url = if (page == 1) request.data else "${request.data}$page/"
-        val res = app.get(url)
+        val res = app.get(mainUrl)
         mainUrl = getBaseUrl(res.url)
 
-        val items = res.document
-            .select("div.items article.item, div.list_genres article.item")
-            .mapNotNull { it.toSearchResult(request.name) }
+        val items = when (request.name) {
+            "Latest Update" -> res.document.select("#dt-latest article.item")
+            "TV Series" -> res.document.select("#dt-tvshows article.item")
+            "Action" -> res.document.select("#dt-action article.item")
+            "Anime" -> res.document.select("#genre_anime article.item")
+            "Comedy" -> res.document.select("#dt-comedy article.item")
+            "Crime" -> res.document.select("#dt-crime article.item")
+            "Drama" -> res.document.select("#dt-drama article.item")
+            "Fantasy" -> res.document.select("#dt-fantasy article.item")
+            "Horror" -> res.document.select("#dt-horror article.item")
+            "Mystery" -> res.document.select("#dt-mystery article.item")
+            "China" -> res.document.select("#country_china article.item")
+            "Japan" -> res.document.select("#country_japan article.item")
+            "Philippines" -> res.document.select("#country_philippines article.item")
+            "Thailand" -> res.document.select("#country_thailand article.item")
+            else -> res.document.select("#dt-latest article.item")
+        }.mapNotNull { it.toSearchResult(request.name) }
 
         return newHomePageResponse(request.name, items)
     }
@@ -92,7 +93,6 @@ class Midasxxi : MainAPI() {
 
         val href = selectFirst("a")?.attr("href")?.fixUrl() ?: return null
         val poster = extractPoster(this)
-        val quality = extractQuality(this, category)
 
         val type =
             if (href.contains("/tvshows/")) TvType.TvSeries
@@ -100,7 +100,6 @@ class Midasxxi : MainAPI() {
 
         return newMovieSearchResponse(title.trim(), href, type) {
             this.posterUrl = poster
-            this.quality = quality
         }
     }
 
