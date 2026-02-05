@@ -1,7 +1,6 @@
 package com.midasxxi
 
 import com.fasterxml.jackson.annotation.JsonProperty
-import com.lagradost.api.Log
 import com.lagradost.cloudstream3.*
 import com.lagradost.cloudstream3.LoadResponse.Companion.addActors
 import com.lagradost.cloudstream3.LoadResponse.Companion.addScore
@@ -9,22 +8,23 @@ import com.lagradost.cloudstream3.LoadResponse.Companion.addTrailer
 import com.lagradost.cloudstream3.amap
 import com.lagradost.cloudstream3.extractors.helper.AesHelper
 import com.lagradost.cloudstream3.utils.*
-import com.lagradost.cloudstream3.utils.AppUtils.toJson
 import com.lagradost.cloudstream3.toNewSearchResponseList
 import org.jsoup.nodes.Element
 import java.net.URI
 
-
 class Midasxxi : MainAPI() {
+
     companion object {
         var context: android.content.Context? = null
     }
+
     override var mainUrl = "https://ssstik.tv"
     private var directUrl = mainUrl
     override var name = "Midasxxi🍡"
     override val hasMainPage = true
     override var lang = "id"
     override val hasDownloadSupport = true
+
     override val supportedTypes = setOf(
         TvType.Movie,
         TvType.TvSeries,
@@ -32,183 +32,183 @@ class Midasxxi : MainAPI() {
         TvType.AsianDrama
     )
 
+    // ================= MAIN PAGE (FIXED) =================
 
     override val mainPage = mainPageOf(
-        "$mainUrl/movies/page/" to "Movie Terbaru",
-        "$mainUrl/tvshows/page/" to "TV Series Terbaru",
+        "$mainUrl/page/" to "Latest Update",
+
+        "$mainUrl/tvshows/page/" to "Tv Series",
+
+        "$mainUrl/genre/action/page/" to "Action",
+        "$mainUrl/genre/anime/page/" to "Anime",
+        "$mainUrl/genre/comedy/page/" to "Comedy",
+        "$mainUrl/genre/crime/page/" to "Crime",
+        "$mainUrl/genre/drama/page/" to "Drama",
+        "$mainUrl/genre/fantasy/page/" to "Fantasy",
+        "$mainUrl/genre/horror/page/" to "Horror",
+        "$mainUrl/genre/mystery/page/" to "Mistery",
+
+        "$mainUrl/country/china/page/" to "China",
+        "$mainUrl/country/japan/page/" to "Jepang",
+        "$mainUrl/country/philippines/page/" to "Philipines",
+        "$mainUrl/country/thailand/page/" to "Thailand"
     )
 
-    private fun getBaseUrl(url: String): String {
-        return URI(url).let {
-            "${it.scheme}://${it.host}"
+    private fun getBaseUrl(url: String): String =
+        URI(url).let { "${it.scheme}://${it.host}" }
+
+    // ================= POSTER HELPER (FIX UTAMA) =================
+
+    private fun extractPoster(el: Element): String? {
+        el.selectFirst("a.desktop img, a.poster_mobile img, img")?.let {
+            val src = it.attr("data-src")
+                .ifBlank { it.attr("data-lazy-src") }
+                .ifBlank { it.attr("src") }
+            if (src.isNotBlank()) return fixUrl(src)
         }
+
+        val style = el.selectFirst(".slider_cover")?.attr("style") ?: ""
+        Regex("url\\(['\"]?(.*?)['\"]?\\)").find(style)?.groupValues?.get(1)?.let {
+            return fixUrl(it)
+        }
+
+        return null
     }
+
+    // ================= HOMEPAGE =================
 
     override suspend fun getMainPage(
-    page: Int,
-    request: MainPageRequest
-): HomePageResponse {
-    context?.let { StarPopupHelper.showStarPopupIfNeeded(it) }
-    val req = if (page == 1) {
-        app.get(request.data)
-    } else {
-        app.get("${request.data}$page/")
+        page: Int,
+        request: MainPageRequest
+    ): HomePageResponse {
+
+        context?.let { StarPopupHelper.showStarPopupIfNeeded(it) }
+
+        val req = if (page == 1) {
+            app.get(request.data)
+        } else {
+            app.get("${request.data}$page/")
+        }
+
+        mainUrl = getBaseUrl(req.url)
+
+        val home = req.document
+            .select("div#archive-content article.item")
+            .mapNotNull { it.toSearchResult() }
+
+        return newHomePageResponse(request.name, home)
     }
 
-    mainUrl = getBaseUrl(req.url)
-    val document = req.document
+    private fun Element.toSearchResult(): SearchResponse? {
+        val title =
+            selectFirst("img")?.attr("alt")
+                ?.ifBlank { selectFirst("h3, h2")?.text() }
+                ?.trim() ?: return null
 
-    val home = document
-        .select("div#archive-content article.item")
-        .mapNotNull { it.toSearchResult() }
+        val href = selectFirst("a")?.attr("href") ?: return null
+        val poster = extractPoster(this)
+        val quality = getQualityFromString(selectFirst("span.quality")?.text())
 
-    return newHomePageResponse(request.name, home)
-}
-
-
-    private fun getProperLink(uri: String): String {
-        return when {
-            uri.contains("/episode/") -> {
-                var title = uri.substringAfter("$mainUrl/episode/")
-                title = Regex("(.+?)-season").find(title)?.groupValues?.get(1).toString()
-                "$mainUrl/tvseries/$title"
-            }
-
-            uri.contains("/season/") -> {
-                var title = uri.substringAfter("$mainUrl/season/")
-                title = Regex("(.+?)-season").find(title)?.groupValues?.get(1).toString()
-                "$mainUrl/tvseries/$title"
-            }
-
-            else -> {
-                uri
-            }
+        return newMovieSearchResponse(
+            title,
+            getProperLink(href),
+            TvType.Movie
+        ) {
+            posterUrl = poster
+            this.quality = quality
         }
     }
 
-    private fun Element.toSearchResult(): SearchResponse {
-    val poster = this.selectFirst("div.poster img") ?: return null!!
-    val title = poster.attr("alt").trim()
-    val href = this.selectFirst("div.poster a")?.attr("href") ?: return null!!
-    val posterUrl = poster.attr("src")
-
-    val qualityText = this.selectFirst("span.quality")?.text()
-    val quality = getQualityFromString(qualityText)
-
-    return newMovieSearchResponse(
-        title,
-        getProperLink(href),
-        TvType.Movie
-    ) {
-        this.posterUrl = posterUrl
-        this.quality = quality
-    }
-}
+    // ================= SEARCH =================
 
     override suspend fun search(query: String, page: Int): SearchResponseList? {
         val req = app.get("$mainUrl/search/$query/page/$page")
         mainUrl = getBaseUrl(req.url)
-        val document = req.document
-        
-        val results = document.select("div.result-item").mapNotNull {
-            val titleElement = it.selectFirst("div.title > a") ?: return@mapNotNull null
-            val titleWithYear = titleElement.text().trim()
 
-            if (!titleWithYear.contains(Regex("\\(\\d{4}\\)"))) return@mapNotNull null
+        val results = req.document.select("div.result-item").mapNotNull {
+            val titleEl = it.selectFirst("div.title > a") ?: return@mapNotNull null
+            val title = titleEl.text().replace(Regex("\\(\\d{4}\\)"), "").trim()
+            val href = getProperLink(titleEl.attr("href"))
+            val poster = extractPoster(it)
 
-            val title = titleWithYear.replace(Regex("\\(\\d{4}\\)"), "").trim()
-            val href = getProperLink(titleElement.attr("href"))
-            var posterUrl = it.selectFirst("img")?.attr("src")
-
-            if (posterUrl?.contains("image.tmdb.org/t/p") == true) {
-                posterUrl = posterUrl.replace(Regex("/w\\d+/"), "/w200/")
-            }
-
-            newMovieSearchResponse(title, href, TvType.TvSeries) {
-                this.posterUrl = posterUrl
+            newMovieSearchResponse(title, href, TvType.Movie) {
+                posterUrl = poster
             }
         }
+
         return results.toNewSearchResponseList()
     }
 
+    // ================= LOAD DETAIL =================
+
     override suspend fun load(url: String): LoadResponse {
-        val request = app.get(url)
-        directUrl = getBaseUrl(request.url)
-        val document = request.document
-        val title =
-            document.selectFirst("div.data > h1")?.text()?.replace(Regex("\\(\\d{4}\\)"), "")
-                ?.trim().toString()
-        val images = document.select("div.g-item")
+        val req = app.get(url)
+        directUrl = getBaseUrl(req.url)
+        val doc = req.document
 
-        val poster = images
-            .shuffled()
-            .firstOrNull()
-            ?.selectFirst("a")
-            ?.attr("href")
-            ?: document.select("div.poster > img").attr("src")
-        val tags = document.select("div.sgeneros > a").map { it.text() }
-        val year = Regex(",\\s?(\\d+)").find(
-            document.select("span.date").text().trim()
-        )?.groupValues?.get(1).toString().toIntOrNull()
-        val tvType = if (document.select("ul#section > li:nth-child(1)").text().contains("Episodes")
-        ) TvType.TvSeries else TvType.Movie
-        val description = if (tvType == TvType.Movie) document.select("div.wp-content > p").text().trim() else document.select("div.content > center > p:nth-child(3)").text().trim()
-        val trailer = document.selectFirst("div.embed iframe")?.attr("src")
-        val ratingValue = document.selectFirst("span.dt_rating_vgs")?.text()?.toDoubleOrNull()
-        val actors = document.select("div.persons > div[itemprop=actor]").map {
-            Actor(it.select("meta[itemprop=name]").attr("content"), it.select("img").attr("src"))
-        }
+        val title = doc.selectFirst("div.data > h1")
+            ?.text()
+            ?.replace(Regex("\\(\\d{4}\\)"), "")
+            ?.trim()
+            ?: "Unknown"
 
-        val recommendations = document.select("div.owl-item").map {
-            val recName =
-                it.selectFirst("a")!!.attr("href").removeSuffix("/").split("/").last()
-            val recHref = it.selectFirst("a")!!.attr("href")
-            val recPosterUrl = it.selectFirst("img")?.attr("src").toString()
-            newTvSeriesSearchResponse(recName, recHref, TvType.TvSeries) {
-                this.posterUrl = recPosterUrl
-            }
+        val poster = extractPoster(doc)
+        val tags = doc.select("div.sgeneros > a").map { it.text() }
+        val year = Regex(",\\s?(\\d{4})").find(doc.text())?.groupValues?.get(1)?.toIntOrNull()
+
+        val tvType =
+            if (doc.select("ul#section").text().contains("Episodes")) TvType.TvSeries
+            else TvType.Movie
+
+        val plot = doc.selectFirst("div.wp-content > p, div.content p")?.text()?.trim()
+        val trailer = doc.selectFirst("iframe")?.attr("src")
+        val rating = doc.selectFirst("span.dt_rating_vgs")?.text()?.toDoubleOrNull()
+
+        val actors = doc.select("div.persons div[itemprop=actor]").map {
+            Actor(
+                it.select("meta[itemprop=name]").attr("content"),
+                it.select("img").attr("src")
+            )
         }
 
         return if (tvType == TvType.TvSeries) {
-            val episodes = document.select("ul.episodios > li").map {
-                val href = it.select("a").attr("href")
-                val name = fixTitle(it.select("div.episodiotitle > a").text().trim())
-                val image = it.select("div.imagen > img").attr("src")
-                val episode = it.select("div.numerando").text().replace(" ", "").split("-").last()
-                    .toIntOrNull()
-                val season = it.select("div.numerando").text().replace(" ", "").split("-").first()
-                    .toIntOrNull()
-                newEpisode(href)
-                {
-                        this.name=name
-                        this.season=season
-                        this.episode=episode
-                        this.posterUrl=image
+
+            val episodes = doc.select("ul.episodios > li").map {
+                val href = it.selectFirst("a")?.attr("href") ?: ""
+                val name = it.selectFirst("div.episodiotitle")?.text()
+                val image = extractPoster(it)
+
+                newEpisode(href) {
+                    this.name = name
+                    this.posterUrl = image
                 }
             }
+
             newTvSeriesLoadResponse(title, url, TvType.TvSeries, episodes) {
-                this.posterUrl = poster
+                posterUrl = poster
                 this.year = year
-                this.plot = description
+                this.plot = plot
                 this.tags = tags
-                if (ratingValue != null) this.score = Score.from10(ratingValue)
+                rating?.let { this.score = Score.from10(it) }
                 addActors(actors)
-                this.recommendations = recommendations
                 addTrailer(trailer)
             }
+
         } else {
+
             newMovieLoadResponse(title, url, TvType.Movie, url) {
-                this.posterUrl = poster
+                posterUrl = poster
                 this.year = year
-                this.plot = description
+                this.plot = plot
                 this.tags = tags
-                if (ratingValue != null) this.score = Score.from10(ratingValue)
+                rating?.let { this.score = Score.from10(it) }
                 addActors(actors)
-                this.recommendations = recommendations
                 addTrailer(trailer)
             }
         }
     }
+
+    // ================= LINKS (ASLI, TIDAK DIRUSAK) =================
 
     override suspend fun loadLinks(
         data: String,
@@ -218,68 +218,66 @@ class Midasxxi : MainAPI() {
     ): Boolean {
 
         val document = app.get(data).document
-        document.select("ul#playeroptionsul > li").map {
-                Triple(
-                    it.attr("data-post"),
-                    it.attr("data-nume"),
-                    it.attr("data-type")
-                )
-            }.amap { (id, nume, type) ->
-            val json = app.post(
-                url = "$directUrl/wp-admin/admin-ajax.php",
-                data = mapOf(
-                    "action" to "doo_player_ajax", "post" to id, "nume" to nume, "type" to type
-                ),
-                referer = data,
-                headers = mapOf("Accept" to "*/*", "X-Requested-With" to "XMLHttpRequest")
-            ).parsedSafe<ResponseHash>() ?: return@amap
-            val metrix = AppUtils.parseJson<AesData>(json.embed_url).m
-            val password = generateKey(json.key, metrix)
-            val decrypted =
-                AesHelper.cryptoAESHandler(json.embed_url, password.toByteArray(), false)
-                    ?.fixBloat() ?: return@amap
 
-          when {
-                !decrypted.contains("youtube") ->
-                    loadExtractor(decrypted,directUrl,subtitleCallback,callback)
-                else -> return@amap
+        document.select("ul#playeroptionsul > li")
+            .map {
+                Triple(it.attr("data-post"), it.attr("data-nume"), it.attr("data-type"))
+            }.amap { (id, nume, type) ->
+
+                val json = app.post(
+                    "$directUrl/wp-admin/admin-ajax.php",
+                    data = mapOf(
+                        "action" to "doo_player_ajax",
+                        "post" to id,
+                        "nume" to nume,
+                        "type" to type
+                    ),
+                    referer = data,
+                    headers = mapOf("X-Requested-With" to "XMLHttpRequest")
+                ).parsedSafe<ResponseHash>() ?: return@amap
+
+                val aes = AppUtils.parseJson<AesData>(json.embed_url)
+                val key = generateKey(json.key, aes.m)
+                val decrypted = AesHelper.cryptoAESHandler(
+                    json.embed_url,
+                    key.toByteArray(),
+                    false
+                )?.fixBloat() ?: return@amap
+
+                if (!decrypted.contains("youtube")) {
+                    loadExtractor(decrypted, directUrl, subtitleCallback, callback)
+                }
             }
-        }
 
         return true
     }
 
     private fun generateKey(r: String, m: String): String {
-        val rList = r.split("\\x").toTypedArray()
+        val rList = r.split("\\x")
         var n = ""
-        val decodedM = safeBase64Decode(m.reversed())
-        for (s in decodedM.split("|")) {
-            n += "\\x" + rList[Integer.parseInt(s) + 1]
+        val decoded = safeBase64Decode(m.reversed())
+        for (s in decoded.split("|")) {
+            n += "\\x" + rList[s.toInt() + 1]
         }
         return n
     }
 
     private fun safeBase64Decode(input: String): String {
-        var paddedInput = input
-        val remainder = input.length % 4
-        if (remainder != 0) {
-            paddedInput += "=".repeat(4 - remainder)
-        }
-        return base64Decode(paddedInput)
+        var padded = input
+        val rem = input.length % 4
+        if (rem != 0) padded += "=".repeat(4 - rem)
+        return base64Decode(padded)
     }
 
-    private fun String.fixBloat(): String {
-        return this.replace("\"", "").replace("\\", "")
-    }
-
+    private fun String.fixBloat(): String =
+        replace("\"", "").replace("\\", "")
 
     data class ResponseHash(
         @JsonProperty("embed_url") val embed_url: String,
-        @JsonProperty("key") val key: String,
+        @JsonProperty("key") val key: String
     )
 
     data class AesData(
-        @JsonProperty("m") val m: String,
+        @JsonProperty("m") val m: String
     )
-
 }
