@@ -13,7 +13,7 @@ class Midasxxi : MainAPI() {
     override var mainUrl = "https://ssstik.tv"
     private var directUrl = mainUrl
 
-    override var name = "Midasxxi🍡"
+    override var name = "Midasxxi 🍡"
     override var lang = "id"
     override val hasMainPage = true
     override val hasDownloadSupport = true
@@ -57,8 +57,11 @@ class Midasxxi : MainAPI() {
         return mainUrl + this
     }
 
-    private fun extractPoster(el: Element): String? =
-        el.selectFirst("img")?.attr("src")?.fixUrl()
+    private fun extractPoster(el: Element): String? {
+        return el.selectFirst("img")?.attr("data-src")
+            ?.ifBlank { el.selectFirst("img")?.attr("src") }
+            ?.fixUrl()
+    }
 
     private fun extractQuality(el: Element): SearchQuality? {
         val q = el.selectFirst("span.quality")?.text()?.uppercase() ?: return null
@@ -116,7 +119,7 @@ class Midasxxi : MainAPI() {
             .select("article.item")
             .mapNotNull { it.toSearchResult() }
 
-        return SearchResponseList(items)
+        return newSearchResponseList(items)
     }
 
     // ================= LOAD =================
@@ -126,7 +129,7 @@ class Midasxxi : MainAPI() {
         directUrl = getBaseUrl(res.url)
 
         val doc = res.document
-        val title = doc.selectFirst("h1")?.text() ?: "Unknown"
+        val title = doc.selectFirst("h1")?.text()?.trim() ?: "Unknown"
         val poster = extractPoster(doc)
         val plot = doc.selectFirst("div.wp-content p")?.text()
         val tags = doc.select("div.sgeneros a").map { it.text() }
@@ -134,10 +137,14 @@ class Midasxxi : MainAPI() {
         val isSeries = doc.select("ul.episodios").isNotEmpty()
 
         return if (isSeries) {
+
             val episodes = doc.select("ul.episodios li").map {
                 val link = it.selectFirst("a")?.attr("href") ?: ""
                 val name = it.selectFirst(".episodiotitle")?.text()
-                newEpisode(link) { this.name = name }
+
+                newEpisode(link) {
+                    this.name = name
+                }
             }
 
             newTvSeriesLoadResponse(title, url, TvType.TvSeries, episodes) {
@@ -145,7 +152,9 @@ class Midasxxi : MainAPI() {
                 this.plot = plot
                 this.tags = tags
             }
+
         } else {
+
             newMovieLoadResponse(title, url, TvType.Movie, url) {
                 posterUrl = poster
                 this.plot = plot
@@ -166,6 +175,7 @@ class Midasxxi : MainAPI() {
         val doc = app.get(data).document
 
         doc.select("ul#playeroptionsul li").amap {
+
             val json = app.post(
                 "$directUrl/wp-admin/admin-ajax.php",
                 data = mapOf(
@@ -185,10 +195,12 @@ class Midasxxi : MainAPI() {
                 json.embed_url,
                 key.toByteArray(),
                 false
-            )?.replace("\"", "")?.replace("\\", "") ?: return@amap
+            )?.replace("\"", "")?.replace("\\", "")
+                ?: return@amap
 
             loadExtractor(decrypted, directUrl, subtitleCallback, callback)
         }
+
         return true
     }
 
@@ -196,7 +208,9 @@ class Midasxxi : MainAPI() {
         val rList = r.split("\\x")
         val decoded = base64Decode(m.reversed())
         var n = ""
-        for (s in decoded.split("|")) n += "\\x" + rList[s.toInt() + 1]
+        for (s in decoded.split("|")) {
+            n += "\\x" + rList[s.toInt() + 1]
+        }
         return n
     }
 
